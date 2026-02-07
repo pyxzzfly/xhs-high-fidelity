@@ -63,23 +63,31 @@ if [[ "$ENABLE_MATTING" == "1" ]]; then
   "$MATTING_DIR/venv/bin/pip" install -r "$MATTING_DIR/requirements.txt"
 
   echo "[bootstrap] starting matting-service :$MATTING_PORT ..."
-  nohup "$MATTING_DIR/venv/bin/uvicorn" app:app --host 127.0.0.1 --port "$MATTING_PORT" > "$LOG_DIR/matting-uvicorn.log" 2>&1 &
-  echo $! > "$LOG_DIR/matting-uvicorn.pid"
+  (
+    cd "$MATTING_DIR"
+    nohup "$MATTING_DIR/venv/bin/uvicorn" app:app --host 127.0.0.1 --port "$MATTING_PORT" > "$LOG_DIR/matting-uvicorn.log" 2>&1 &
+    echo $! > "$LOG_DIR/matting-uvicorn.pid"
+  )
 fi
 
 echo "[bootstrap] starting backend :$BACKEND_PORT ..."
-nohup "$BACKEND_DIR/venv/bin/uvicorn" app.main:app --host 0.0.0.0 --port "$BACKEND_PORT" > "$LOG_DIR/backend-uvicorn.log" 2>&1 &
-echo $! > "$LOG_DIR/backend-uvicorn.pid"
+(
+  cd "$BACKEND_DIR"
+  nohup "$BACKEND_DIR/venv/bin/uvicorn" app.main:app --host 0.0.0.0 --port "$BACKEND_PORT" > "$LOG_DIR/backend-uvicorn.log" 2>&1 &
+  echo $! > "$LOG_DIR/backend-uvicorn.pid"
+)
 
 echo "[bootstrap] starting frontend :$FRONTEND_PORT ..."
-nohup "$FRONTEND_DIR/venv/bin/python" -m streamlit run "$FRONTEND_DIR/app.py" \
-  --server.address 0.0.0.0 \
-  --server.port "$FRONTEND_PORT" > "$LOG_DIR/frontend-streamlit.log" 2>&1 &
-echo $! > "$LOG_DIR/frontend-streamlit.pid"
+(
+  cd "$FRONTEND_DIR"
+  nohup "$FRONTEND_DIR/venv/bin/python" -m streamlit run app.py \
+    --server.address 0.0.0.0 \
+    --server.port "$FRONTEND_PORT" > "$LOG_DIR/frontend-streamlit.log" 2>&1 &
+  echo $! > "$LOG_DIR/frontend-streamlit.pid"
+)
 
 echo
 echo "[bootstrap] OK"
 echo "[bootstrap] backend  : http://127.0.0.1:$BACKEND_PORT/health"
 echo "[bootstrap] frontend : http://127.0.0.1:$FRONTEND_PORT"
 echo "[bootstrap] logs     : $LOG_DIR"
-
