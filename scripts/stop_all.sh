@@ -23,7 +23,8 @@ stop_pidfile() {
     echo "[stop] $name pid=$pid"
     kill "$pid" >/dev/null 2>&1 || true
     # best-effort wait
-    for _ in 1 2 3 4 5; do
+    # Streamlit/Uvicorn sometimes takes a couple seconds to exit cleanly.
+    for _ in $(seq 1 20); do
       if ! kill -0 "$pid" >/dev/null 2>&1; then
         break
       fi
@@ -43,4 +44,3 @@ stop_pidfile() {
 stop_pidfile "frontend-streamlit"
 stop_pidfile "backend-uvicorn"
 stop_pidfile "matting-uvicorn"
-
