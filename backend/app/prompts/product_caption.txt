@@ -1,0 +1,1 @@
+Describe the main object in this image. Focus on distinct visual features (color, material, text, shape). Output only the physical description. Example: "a silver cylindrical serum bottle with a black pump".

@@ -1,0 +1,23 @@
+Analyze this reference image and output in exactly three paragraphs:
+
+1. SCENE TYPE:
+   Classify the scene type. Options: HAND_HELD, FLAT_LAY, CLOSE_UP, AMBIENT, OTHER.
+   - HAND_HELD: Product held in hand or near body
+   - FLAT_LAY: Product on flat surface (desk, bed, carpet)
+   - CLOSE_UP: Product occupies most of the frame
+   - AMBIENT: Product in environment, relatively small
+
+2. SCENE DESCRIPTION:
+   Describe the overall scene including background, lighting, atmosphere, and visual style.
+   Focus on: natural lighting, authentic textures, relaxed candid atmosphere.
+   IMPORTANT: Ignore the main product/subject in the image - focus ONLY on the background and environment.
+
+   TEXTURE & QUALITY: Look for film grain, noise, slight blur, high ISO, motion blur, or phone photography artifacts. Is it a raw, unpolished photo?
+
+3. LIGHTING/STYLE:
+   Describe the lighting setup and overall visual style.
+
+Output format must be:
+SCENE_TYPE: <type>
+SCENE_DESCRIPTION: <description>
+LIGHTING/STYLE: <style>

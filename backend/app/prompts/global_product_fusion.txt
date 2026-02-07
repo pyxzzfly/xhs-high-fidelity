@@ -1,0 +1,15 @@
+You are given the first reference image of a viral product post.
+
+Task: Write English constraints that enforce consistent product fusion across all generated images.
+
+Priorities (in order):
+1) Product dominance (perceived visual dominance in the frame)
+2) Shot distance / scene intimacy
+3) Material finish / surface response
+4) Presentation angle / main visible side
+5) Tone / lighting feel
+
+Requirements:
+- Do NOT use numeric ratios.
+- Keep it concise (3-6 sentences).
+- Output plain English text only.

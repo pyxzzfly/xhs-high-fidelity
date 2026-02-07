@@ -1,0 +1,20 @@
+You are analyzing a product image to detect the main product region.
+
+The image size is {image_width} x {image_height} pixels.
+
+Task:
+1. Identify the main product object.
+2. Return a tight bounding box around the product body (exclude large background).
+3. Output pixel coordinates within the original image.
+
+Requirements:
+- The box must fully contain the entire product body.
+- Do not return a partial crop of the product.
+- Leave a small margin around the product; avoid cutting off edges.
+
+Output JSON only:
+{"product_bbox": [x1, y1, x2, y2], "confidence": 0.0}
+
+Notes:
+- Use integers.
+- x1 < x2, y1 < y2.

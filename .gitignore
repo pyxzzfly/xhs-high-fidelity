@@ -1,0 +1,31 @@
+.DS_Store
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# env
+.env
+backend/.env
+matting-service/.env
+frontend/.env
+
+# python
+venv/
+.venv/
+
+# artifacts
+assets/
+backend/assets/
+artifacts/
+scripts/fixtures/
+
+# node
+node_modules/
+
+# ide
+.idea/
+
+# logs
+logs/
