@@ -194,7 +194,7 @@ with tab_rewrite:
             st.write(" ".join(out.get("hashtags")))
 
         st.divider()
-        st.subheader("配图仿写对比")
+        st.subheader("配图仿写")
         urls = st.session_state.get("xhs_image_urls") or []
         if not urls:
             st.info("需要先采集到插图，才能生成配图")
@@ -220,12 +220,6 @@ with tab_rewrite:
                     if resp2 is None:
                         pass
                     elif not resp2.ok:
-                        st.error(f"配图失败: {resp2.status_code}")
-                        st.code(resp2.text)
-                    else:
-                        data2 = resp2.json()
-                        st.session_state["ab_result"] = data2
-                    if not resp2.ok:
                         st.error(f"配图失败: {resp2.status_code}")
                         st.code(resp2.text)
                     else:
