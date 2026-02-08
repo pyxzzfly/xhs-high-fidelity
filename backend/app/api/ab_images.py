@@ -10,13 +10,12 @@ from pathlib import Path
 from typing import List
 
 from fastapi import APIRouter, Form, HTTPException
-from PIL import Image
+from PIL import Image, ImageFilter
 
 from app.services.detail_transfer import transfer_high_frequency_details
 from app.services.mask_utils import (
     bbox_dominance_ratio,
     bbox_from_mask_l,
-    make_background_edit_mask,
     mask_l_to_png_bytes,
 )
 from app.services.page_templates import make_page_contain
@@ -137,7 +136,7 @@ async def generate_ab_images(
             engine = "v2_mask"
 
         # V2 controls (safe defaults)
-        protect_dilate_px = int(os.getenv("AB_MASK_PROTECT_DILATE_PX") or "8")
+        protect_dilate_px = int(os.getenv("AB_MASK_PROTECT_DILATE_PX") or "4")
         protect_dilate_px = max(0, min(64, protect_dilate_px))
         max_ratio_delta = float(os.getenv("AB_MAX_BBOX_RATIO_DELTA") or "0.08")
         max_ratio_delta = max(0.0, min(0.5, max_ratio_delta))
@@ -145,8 +144,10 @@ async def generate_ab_images(
         # In mask-edit mode, the matting mask often contains soft shadows/reflections.
         # Use a stricter "core" threshold to protect only the product itself, and
         # allow Painter to rewrite the shadow/reflection area as part of the background.
-        core_threshold = int(os.getenv("AB_PRODUCT_CORE_THRESHOLD") or "208")
+        core_threshold = int(os.getenv("AB_PRODUCT_CORE_THRESHOLD") or "224")
         core_threshold = max(128, min(250, core_threshold))
+        core_open_px = int(os.getenv("AB_PRODUCT_MASK_OPEN_PX") or "3")
+        core_open_px = max(0, min(64, core_open_px))
 
         detail_transfer_on = (os.getenv("AB_DETAIL_TRANSFER") or "1").strip() not in {"0", "false", "False"}
         detail_alpha = float(os.getenv("AB_DETAIL_TRANSFER_ALPHA") or "0.22")
@@ -155,7 +156,7 @@ async def generate_ab_images(
         detail_blur = max(0.2, min(10.0, detail_blur))
         detail_threshold = int(os.getenv("AB_DETAIL_TRANSFER_THRESHOLD") or str(core_threshold))
         detail_threshold = max(128, min(250, detail_threshold))
-        detail_inner_erode_px = int(os.getenv("AB_DETAIL_TRANSFER_INNER_ERODE_PX") or "6")
+        detail_inner_erode_px = int(os.getenv("AB_DETAIL_TRANSFER_INNER_ERODE_PX") or "8")
         detail_inner_erode_px = max(0, min(64, detail_inner_erode_px))
 
         # Parse levels
@@ -240,14 +241,31 @@ async def generate_ab_images(
                 product_mask_l = product_mask_l.convert("L")
                 product_mask_png = mask_l_to_png_bytes(product_mask_l)
 
-                bbox = bbox_from_mask_l(product_mask_l, threshold=core_threshold)
+                # Build a cleaner "product core" mask for protection:
+                # - use a high threshold to avoid including soft shadows/reflections
+                # - apply morphological opening to remove small protrusions (often shadows)
+                product_core = product_mask_l.point(lambda p: 255 if p >= core_threshold else 0, mode="L")
+                if core_open_px > 0:
+                    size = core_open_px * 2 + 1
+                    if size >= 3:
+                        product_core = product_core.filter(ImageFilter.MinFilter(size=size))
+                        product_core = product_core.filter(ImageFilter.MaxFilter(size=size))
+
+                # If threshold/opening is too strict, fall back to a lower threshold.
+                if product_core.getbbox() is None:
+                    product_core = product_mask_l.point(lambda p: 255 if p >= 160 else 0, mode="L")
+
+                bbox = product_core.getbbox()
                 input_ratio = bbox_dominance_ratio(bbox, size=product_mask_l.size)
 
-                edit_mask_l = make_background_edit_mask(
-                    product_mask_l,
-                    threshold=core_threshold,
-                    protect_dilate_px=protect_dilate_px,
-                )
+                protected = product_core
+                if protect_dilate_px > 0:
+                    size = protect_dilate_px * 2 + 1
+                    if size >= 3:
+                        protected = protected.filter(ImageFilter.MaxFilter(size=size))
+
+                # Painter convention: white=editable, black=protected.
+                edit_mask_l = protected.point(lambda p: 255 - p, mode="L")
                 edit_mask_png = mask_l_to_png_bytes(edit_mask_l)
 
                 base_png_cache[idx] = base_png
@@ -376,7 +394,7 @@ async def generate_ab_images(
                                 bufm2 = io.BytesIO()
                                 img.convert("RGB").save(bufm2, format="PNG")
                                 _, m2 = matting.matting(bufm2.getvalue(), filename=f"xhs_out_{idx+1:02d}.png")
-                                bbox2 = bbox_from_mask_l(m2.convert("L"), threshold=128)
+                                bbox2 = bbox_from_mask_l(m2.convert("L"), threshold=core_threshold)
                                 return bbox_dominance_ratio(bbox2, size=m2.size)
                             except Exception:
                                 return None
