@@ -142,11 +142,21 @@ async def generate_ab_images(
         max_ratio_delta = float(os.getenv("AB_MAX_BBOX_RATIO_DELTA") or "0.08")
         max_ratio_delta = max(0.0, min(0.5, max_ratio_delta))
 
+        # In mask-edit mode, the matting mask often contains soft shadows/reflections.
+        # Use a stricter "core" threshold to protect only the product itself, and
+        # allow Painter to rewrite the shadow/reflection area as part of the background.
+        core_threshold = int(os.getenv("AB_PRODUCT_CORE_THRESHOLD") or "208")
+        core_threshold = max(128, min(250, core_threshold))
+
         detail_transfer_on = (os.getenv("AB_DETAIL_TRANSFER") or "1").strip() not in {"0", "false", "False"}
         detail_alpha = float(os.getenv("AB_DETAIL_TRANSFER_ALPHA") or "0.22")
         detail_alpha = max(0.0, min(0.6, detail_alpha))
         detail_blur = float(os.getenv("AB_DETAIL_TRANSFER_BLUR_RADIUS") or "2.0")
         detail_blur = max(0.2, min(10.0, detail_blur))
+        detail_threshold = int(os.getenv("AB_DETAIL_TRANSFER_THRESHOLD") or str(core_threshold))
+        detail_threshold = max(128, min(250, detail_threshold))
+        detail_inner_erode_px = int(os.getenv("AB_DETAIL_TRANSFER_INNER_ERODE_PX") or "6")
+        detail_inner_erode_px = max(0, min(64, detail_inner_erode_px))
 
         # Parse levels
         try:
@@ -230,12 +240,12 @@ async def generate_ab_images(
                 product_mask_l = product_mask_l.convert("L")
                 product_mask_png = mask_l_to_png_bytes(product_mask_l)
 
-                bbox = bbox_from_mask_l(product_mask_l, threshold=128)
+                bbox = bbox_from_mask_l(product_mask_l, threshold=core_threshold)
                 input_ratio = bbox_dominance_ratio(bbox, size=product_mask_l.size)
 
                 edit_mask_l = make_background_edit_mask(
                     product_mask_l,
-                    threshold=128,
+                    threshold=core_threshold,
                     protect_dilate_px=protect_dilate_px,
                 )
                 edit_mask_png = mask_l_to_png_bytes(edit_mask_l)
@@ -257,7 +267,8 @@ async def generate_ab_images(
                 # Keep subject stable; only rewrite background (cleaner look).
                 return (
                     "基于输入图做『背景局部改写』：只改背景和道具，不要改变主体/产品本身（形状、大小比例、文字、logo尽量保持）。"
-                    "整体更干净精修但仍真实自然：光源方向一致，接触阴影自然，透视正确，避免漂浮和贴图感。"
+                    "整体更干净精修但仍真实自然：光源方向一致，透视正确，接触阴影自然，避免漂浮和贴图感。"
+                    "去掉输入图里原本的硬阴影/倒影/镜面反射痕迹，重新生成与新背景一致的自然投影（如需要）。"
                     "不要水印，不要叠加文字/字幕/贴纸。主体在画面中的占比不要变大。"
                 )
             if (style_preset or "ugc") == "glossy":
@@ -271,7 +282,8 @@ async def generate_ab_images(
                 return (
                     "基于输入图做『背景局部改写』：只改背景和道具，不要改变主体/产品本身（形状、大小比例、文字、logo尽量保持）。"
                     f"背景换成更真实生活感、不过分干净的场景（{scene}），{strength_hint}。"
-                    "保持相机视角与透视一致，光源方向一致，接触阴影自然，避免漂浮和贴图感。"
+                    "保持相机视角与透视一致，光源方向一致，透视正确，接触阴影自然，避免漂浮和贴图感。"
+                    "去掉输入图里原本的硬阴影/倒影/镜面反射痕迹，重新生成与新背景一致的自然投影（如需要）。"
                     "不要新增大面积遮挡主体的物体；不要添加水印；不要叠加文字/字幕/贴纸。"
                     "主体在画面中的占比不要变大，尽量保持相同或略小。"
                 )
@@ -354,8 +366,8 @@ async def generate_ab_images(
                                     product_mask_l=product_mask_l,
                                     alpha=detail_alpha,
                                     blur_radius=detail_blur,
-                                    threshold=128,
-                                    inner_erode_px=4,
+                                    threshold=detail_threshold,
+                                    inner_erode_px=detail_inner_erode_px,
                                 )
                             return out_img
 
