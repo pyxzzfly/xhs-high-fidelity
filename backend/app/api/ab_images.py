@@ -48,55 +48,20 @@ def _load_images(urls: List[str]) -> List[Image.Image]:
 def _choose_scene_tokens(*, title: str, bullets: List[str], rng) -> List[str]:
     """Pick a small pool of plausible everyday scenes.
 
-    We deliberately avoid strange/unsafe settings (e.g. subway for alcohol).
+    Keep it generic (not tied to specific product categories), and avoid strange/unsafe
+    settings that easily look "wrong" in real life.
     """
-    t = f"{title or ''} " + " ".join(str(b or "") for b in (bullets or []))
-
-    def has_any(keys: List[str]) -> bool:
-        return any(k in t for k in keys)
-
-    # More specific pools first.
-    if has_any(["酒", "啤酒", "红酒", "白酒", "威士忌", "伏特加", "香槟", "鸡尾酒"]):
-        pool = [
-            "家里餐桌",
-            "客厅茶几",
-            "厨房台面（像在备餐/聚餐前）",
-            "朋友家聚会餐桌角落",
-            "家里吧台/餐边柜",
-        ]
-    elif has_any(["面膜", "精华", "水乳", "防晒", "口红", "粉底", "护肤", "香水", "洁面", "卸妆"]):
-        pool = [
-            "梳妆台",
-            "浴室洗手台",
-            "窗边桌面自然光",
-            "卧室床头柜",
-            "书桌角落（生活化收纳）",
-        ]
-    elif has_any(["电脑", "键盘", "鼠标", "耳机", "相机", "镜头", "手机", "充电", "路由器"]):
-        pool = [
-            "书桌",
-            "窗边桌面自然光",
-            "咖啡店靠窗桌面",
-            "客厅电视柜/书架旁",
-            "卧室床头柜",
-        ]
-    elif has_any(["零食", "饮料", "咖啡", "茶", "酸奶", "饼干", "巧克力", "泡面", "速食"]):
-        pool = [
-            "厨房台面",
-            "餐桌",
-            "窗边桌面自然光",
-            "办公室茶水间台面（正常合理）",
-            "客厅茶几",
-        ]
-    else:
-        # Generic safe scenes.
-        pool = [
-            "窗边桌面自然光",
-            "书桌",
-            "客厅茶几",
-            "厨房台面",
-            "卧室床头柜",
-        ]
+    # Generic safe scenes.
+    pool = [
+        "窗边桌面自然光",
+        "书桌（生活化收纳）",
+        "客厅茶几",
+        "厨房台面",
+        "餐桌角落",
+        "卧室床头柜",
+        "客厅边柜/置物架旁",
+        "阳台/飘窗小桌",
+    ]
 
     # Pick a stable subset.
     k = 3 if len(pool) >= 3 else len(pool)
