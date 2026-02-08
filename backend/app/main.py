@@ -5,7 +5,16 @@ import os
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-import torch
+
+# torch is optional for "crawler-only" and "painter-only" workflows.
+# Some environments (e.g. macOS + newer Python) may not have a compatible wheel.
+try:  # pragma: no cover
+    import torch  # type: ignore
+except Exception as exc:  # pragma: no cover
+    torch = None  # type: ignore[assignment]
+    _TORCH_IMPORT_ERROR = exc
+else:  # pragma: no cover
+    _TORCH_IMPORT_ERROR = None
 
 # Load backend/.env as early as possible so module-level singletons that read env
 # (e.g. VisionService, PainterClient) see the correct config.
@@ -31,12 +40,15 @@ async def lifespan(app: FastAPI):
     logger.info("Starting XHS High Fidelity Backend...")
     logger.info(f"XHS env loaded: cookie_len={cookie_len}, user_data_dir={'set' if user_data_dir else 'empty'}")
     # Pre-flight check for GPU
-    if torch.cuda.is_available():
-        logger.info(f"GPU Detected: {torch.cuda.get_device_name(0)}")
-    elif torch.backends.mps.is_available():
-        logger.info("MPS (Mac) Detected")
+    if torch is None:
+        logger.warning(f"torch not available (GPU checks disabled): {_TORCH_IMPORT_ERROR}")
     else:
-        logger.warning("No GPU detected, running on CPU (Slow!)")
+        if torch.cuda.is_available():
+            logger.info(f"GPU Detected: {torch.cuda.get_device_name(0)}")
+        elif torch.backends.mps.is_available():
+            logger.info("MPS (Mac) Detected")
+        else:
+            logger.warning("No GPU detected, running on CPU (Slow!)")
     
     yield
     
@@ -72,6 +84,8 @@ async def gpu_health():
     async with gpu_lock():
         try:
             # Simple tensor operation to check health
+            if torch is None:
+                return {"status": "ok", "device": "cpu", "torch": False, "error": str(_TORCH_IMPORT_ERROR)}
             if torch.cuda.is_available():
                 x = torch.ones(1).cuda()
                 y = x + 1
@@ -81,7 +95,7 @@ async def gpu_health():
                 y = x + 1
                 return {"status": "ok", "device": "mps"}
             else:
-                return {"status": "ok", "device": "cpu"}
+                return {"status": "ok", "device": "cpu", "torch": True}
         except Exception as e:
             logger.error(f"GPU Health Check Failed: {str(e)}")
             raise HTTPException(status_code=500, detail="GPU Failure")

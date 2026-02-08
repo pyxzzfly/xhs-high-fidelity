@@ -148,6 +148,10 @@ async def generate_ab_images(
         core_threshold = max(128, min(250, core_threshold))
         core_open_px = int(os.getenv("AB_PRODUCT_MASK_OPEN_PX") or "3")
         core_open_px = max(0, min(64, core_open_px))
+        # Further shrink the protected core to avoid preserving input shadows/reflections
+        # that matting sometimes includes as "foreground".
+        core_erode_px = int(os.getenv("AB_PRODUCT_CORE_ERODE_PX") or "4")
+        core_erode_px = max(0, min(128, core_erode_px))
 
         detail_transfer_on = (os.getenv("AB_DETAIL_TRANSFER") or "1").strip() not in {"0", "false", "False"}
         detail_alpha = float(os.getenv("AB_DETAIL_TRANSFER_ALPHA") or "0.22")
@@ -250,6 +254,15 @@ async def generate_ab_images(
                     if size >= 3:
                         product_core = product_core.filter(ImageFilter.MinFilter(size=size))
                         product_core = product_core.filter(ImageFilter.MaxFilter(size=size))
+
+                # Optional additional erosion: biases towards keeping only the object interior,
+                # so reflections/ground shadows are more likely to fall into the editable region.
+                if core_erode_px > 0:
+                    size = core_erode_px * 2 + 1
+                    if size >= 3:
+                        eroded = product_core.filter(ImageFilter.MinFilter(size=size))
+                        if eroded.getbbox() is not None:
+                            product_core = eroded
 
                 # If threshold/opening is too strict, fall back to a lower threshold.
                 if product_core.getbbox() is None:
