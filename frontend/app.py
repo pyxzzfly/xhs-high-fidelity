@@ -255,7 +255,7 @@ with tab_rewrite:
                                 st.caption("图片加载失败")
 
                 if data2.get("b_error"):
-                    st.warning(f"B 部分图片可能降级/失败：{data2['b_error']}")
+                    st.warning(f"B 有自动回退/失败项（不影响整体出图）：{data2['b_error']}")
                 st.caption(f"产物目录: {data2.get('artifacts_dir')}")
 
 

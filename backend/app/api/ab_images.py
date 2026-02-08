@@ -381,7 +381,12 @@ async def generate_ab_images(
                                 if r2 is not None and abs(r2 - input_ratio) > max_ratio_delta:
                                     # Fallback to medium strength to keep realism if aggressive keeps drifting.
                                     out3 = _run_v2(0.58)
-                                    err = f"scale_gate_fallback(in={input_ratio:.3f}, out={r2:.3f})"
+                                    # Record a lightweight warning for UI/debugging.
+                                    r3 = _ratio_for(out3)
+                                    if r3 is not None:
+                                        err = f"scale_gate_fallback(in={input_ratio:.3f}, out={r2:.3f}, fallback={r3:.3f})"
+                                    else:
+                                        err = f"scale_gate_fallback(in={input_ratio:.3f}, out={r2:.3f})"
                                     out_img = out3
                                 else:
                                     out_img = out2
