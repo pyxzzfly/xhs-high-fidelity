@@ -26,7 +26,8 @@ class MattingClient:
     def matting(self, image_bytes: bytes, filename: str = "image.png") -> Tuple[Image.Image, Image.Image]:
         """Return (product_rgba, product_mask_L)."""
         url = self.base_url.rstrip("/") + "/matting"
-        with httpx.Client(timeout=180) as client:
+        # Do not route localhost/internal service calls through env HTTP proxies.
+        with httpx.Client(timeout=180, trust_env=False) as client:
             resp = client.post(url, files={"image": (filename, image_bytes, "application/octet-stream")})
         resp.raise_for_status()
         payload = resp.json()
