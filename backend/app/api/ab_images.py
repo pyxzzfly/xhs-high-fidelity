@@ -115,7 +115,11 @@ async def generate_ab_images(
         core_open_px = max(0, min(64, core_open_px))
         # Further shrink the protected core to avoid preserving input shadows/reflections
         # that matting sometimes includes as "foreground".
-        core_erode_px = int(os.getenv("AB_PRODUCT_CORE_ERODE_PX") or "4")
+        #
+        # IMPORTANT: pasteback uses the same "core" mask. If this is too large, you get
+        # old shadow artifacts; if too small, you risk letting Painter touch logo/text.
+        # Default to 0 (fidelity-first); tune per dataset.
+        core_erode_px = int(os.getenv("AB_PRODUCT_CORE_ERODE_PX") or "0")
         core_erode_px = max(0, min(128, core_erode_px))
 
         detail_transfer_on = (os.getenv("AB_DETAIL_TRANSFER") or "1").strip() not in {"0", "false", "False"}
@@ -183,16 +187,18 @@ async def generate_ab_images(
         base_png_cache: dict[int, bytes] = {}
         product_mask_png_cache: dict[int, bytes] = {}
         edit_mask_png_cache: dict[int, bytes] = {}
+        product_core_png_cache: dict[int, bytes] = {}
         input_ratio_cache: dict[int, float] = {}
 
-        def _get_v2_assets(idx: int) -> tuple[bytes, bytes, bytes, float]:
-            """Return (base_png, product_mask_png, edit_mask_png, input_ratio)."""
+        def _get_v2_assets(idx: int) -> tuple[bytes, bytes, bytes, bytes, float]:
+            """Return (base_png, product_mask_png, edit_mask_png, product_core_png, input_ratio)."""
             with idx_locks[idx]:
                 if idx in edit_mask_png_cache:
                     return (
                         base_png_cache[idx],
                         product_mask_png_cache[idx],
                         edit_mask_png_cache[idx],
+                        product_core_png_cache[idx],
                         input_ratio_cache.get(idx, 0.0),
                     )
 
@@ -236,7 +242,23 @@ async def generate_ab_images(
                 bbox = product_core.getbbox()
                 input_ratio = bbox_dominance_ratio(bbox, size=product_mask_l.size)
 
-                protected = product_core
+                # In V2 we must be very conservative about keeping the product intact; otherwise
+                # Painter may "rewrite" parts of the packaging and we later see a double/overlay.
+                # Use a slightly looser threshold for the protected mask than the "core" mask,
+                # so edges are protected while soft shadows/reflections (usually low alpha) stay editable.
+                protect_threshold_default = max(160, core_threshold - 40)
+                protect_threshold = int(os.getenv("AB_PRODUCT_PROTECT_THRESHOLD") or str(protect_threshold_default))
+                protect_threshold = max(128, min(250, protect_threshold))
+                product_protect = product_mask_l.point(lambda p: 255 if p >= protect_threshold else 0, mode="L")
+                # Always include the core region (defensive against threshold edge-cases).
+                try:
+                    from PIL import ImageChops
+
+                    product_protect = ImageChops.lighter(product_protect, product_core)
+                except Exception:
+                    pass
+
+                protected = product_protect
                 if protect_dilate_px > 0:
                     size = protect_dilate_px * 2 + 1
                     if size >= 3:
@@ -245,12 +267,15 @@ async def generate_ab_images(
                 # Painter convention: white=editable, black=protected.
                 edit_mask_l = protected.point(lambda p: 255 - p, mode="L")
                 edit_mask_png = mask_l_to_png_bytes(edit_mask_l)
+                # Pasteback MUST be within the protected region; otherwise you create visible seams.
+                product_core_png = mask_l_to_png_bytes(product_core)
 
                 base_png_cache[idx] = base_png
                 product_mask_png_cache[idx] = product_mask_png
                 edit_mask_png_cache[idx] = edit_mask_png
+                product_core_png_cache[idx] = product_core_png
                 input_ratio_cache[idx] = input_ratio
-                return base_png, product_mask_png, edit_mask_png, input_ratio
+                return base_png, product_mask_png, edit_mask_png, product_core_png, input_ratio
 
         def _seed_int(*parts: object) -> int:
             h = hashlib.sha256("|".join(str(p) for p in parts).encode("utf-8")).digest()
@@ -304,6 +329,7 @@ async def generate_ab_images(
             img0 = base_images[idx]
             restyled_img = img0.copy()
             err = None
+            v2_edit_mask_png = None
 
             if engine != "v2_mask":
                 # geometric jitter first (composition/viewpoint)
@@ -330,14 +356,31 @@ async def generate_ab_images(
                     prompt = _build_prompt(idx=idx, lvl=lvl)
 
                     if engine == "v2_mask":
-                        base_png, product_mask_png, edit_mask_png, input_ratio = _get_v2_assets(idx)
+                        base_png, product_mask_png, edit_mask_png, product_core_png, input_ratio = _get_v2_assets(idx)
                         product_mask_l = Image.open(io.BytesIO(product_mask_png)).convert("L")
+                        # Use a stricter edit mask for aggressive to prevent bleed into the product.
+                        edit_mask_png_use = edit_mask_png
+                        if lvl == "aggressive":
+                            try:
+                                edit_l = Image.open(io.BytesIO(edit_mask_png)).convert("L")
+                                extra = int(os.getenv("AB_V2_AGGRESSIVE_EDIT_ERODE_PX") or "2")
+                                extra = max(0, min(32, extra))
+                                if extra > 0:
+                                    size = extra * 2 + 1
+                                    if size >= 3:
+                                        edit_l = edit_l.filter(ImageFilter.MinFilter(size=size))
+                                edit_mask_png_use = mask_l_to_png_bytes(edit_l)
+                            except Exception:
+                                edit_mask_png_use = edit_mask_png
+
+                        v2_edit_mask_png = edit_mask_png_use
 
                         # V2 uses mask-edit (background-only) instead of full img2img pasteback.
                         if lvl == "aggressive":
-                            g = 6.3
-                            steps = 34
-                            ps = 0.70
+                            # Keep aggressive more stable to avoid editing bleeding into protected region.
+                            g = 6.25
+                            steps = 32
+                            ps = 0.63
                         else:
                             g = 6.2
                             steps = 30
@@ -346,7 +389,7 @@ async def generate_ab_images(
                         def _run_v2(ps_use: float) -> Image.Image:
                             out_bytes = painter.edit(
                                 image_bytes=base_png,
-                                mask_bytes=edit_mask_png,
+                                mask_bytes=edit_mask_png_use,
                                 prompt=prompt,
                                 negative_prompt=ugc_negative if (style_preset or "ugc") == "ugc" else "",
                                 guidance_scale=g,
@@ -425,58 +468,101 @@ async def generate_ab_images(
                         )
                         restyled_img = Image.open(io.BytesIO(out_bytes)).convert("RGB")
 
-                        # Post-degrade to more UGC
-                        if (style_preset or "ugc") == "ugc":
-                            from app.services.ugc_degrade import apply_ugc_degrade
 
-                            j = lambda a, b: rng_local.uniform(a, b)
-                            restyled_img = apply_ugc_degrade(
-                                restyled_img,
-                                noise_strength=max(0.0, baseline["noise"] + j(-0.008, 0.014)),
-                                contrast=min(0.95, max(0.65, baseline["contrast"] + j(-0.04, 0.03))),
-                                saturation=min(1.05, max(0.65, baseline["saturation"] + j(-0.05, 0.05))),
-                                sharpness=min(1.05, max(0.55, baseline["sharpness"] + j(-0.08, 0.05))),
-                                blur_radius=min(2.0, max(0.3, baseline["blur"] + j(-0.30, 0.35))),
-                                wb_shift=min(0.14, max(-0.12, baseline["wb"] + j(-0.04, 0.04))),
-                                exposure=min(1.12, max(0.88, baseline["exposure"] + j(-0.04, 0.04))),
-                                rotate_deg=j(-1.6, 1.6),
-                            )
+                    # Post-degrade to more UGC (shared for V1/V2): do this before pasteback so
+                    # For V2, degrade only the editable region so the protected product stays intact.
+                    if (style_preset or "ugc") == "ugc":
+                        from app.services.ugc_degrade import apply_ugc_degrade
 
-                        # Pixel-fidelity pasteback
-                        if (fidelity_mode or "pixel") == "pixel" and fg_rgba is not None and fg_mask is not None:
+                        j = lambda a, b: rng_local.uniform(a, b)
+                        degraded = apply_ugc_degrade(
+                            restyled_img,
+                            noise_strength=max(0.0, baseline["noise"] + j(-0.008, 0.014)),
+                            contrast=min(0.95, max(0.65, baseline["contrast"] + j(-0.04, 0.03))),
+                            saturation=min(1.05, max(0.65, baseline["saturation"] + j(-0.05, 0.05))),
+                            sharpness=min(1.05, max(0.55, baseline["sharpness"] + j(-0.08, 0.05))),
+                            blur_radius=min(2.0, max(0.3, baseline["blur"] + j(-0.30, 0.35))),
+                            wb_shift=min(0.14, max(-0.12, baseline["wb"] + j(-0.04, 0.04))),
+                            exposure=min(1.12, max(0.88, baseline["exposure"] + j(-0.04, 0.04))),
+                            # Avoid rotating only the background in V2 (would create seams).
+                            rotate_deg=0.0 if engine == "v2_mask" else j(-1.6, 1.6),
+                        )
+                        if engine == "v2_mask" and isinstance(v2_edit_mask_png, (bytes, bytearray)):
                             try:
-                                from PIL import ImageChops
-
-                                from app.services.harmonize import despill, feather_alpha
-                                from app.services.shadow import ShadowService
-
-                                mask = fg_mask.convert("L")
-                                # Feather alpha edges a bit to reduce hard cutout look.
-                                mask_feather = feather_alpha(mask, radius=3)
-                                fg2 = despill(fg_rgba, mask_feather, strength=0.25)
-
-                                # Add a subtle contact shadow to ground the subject.
-                                shadow = ShadowService().create_contact_shadow(
-                                    mask,
-                                    band_ratio=0.10,
-                                    blur_radius=10,
-                                    opacity=0.18,
-                                    y_offset=2,
-                                )
-                                shadow_multiplier = ImageChops.invert(shadow).convert("RGB")
-                                bg2 = ImageChops.multiply(restyled_img.convert("RGB"), shadow_multiplier)
-
-                                restyled_img = paste_foreground_exact(
-                                    background_rgb=bg2,
-                                    foreground_rgba=fg2,
-                                    mask_l=mask_feather,
-                                )
+                                edit_l = Image.open(io.BytesIO(v2_edit_mask_png)).convert("L")
+                                restyled_img = Image.composite(degraded, restyled_img, edit_l)
                             except Exception:
-                                restyled_img = paste_foreground_exact(
-                                    background_rgb=restyled_img,
-                                    foreground_rgba=fg_rgba,
-                                    mask_l=fg_mask,
-                                )
+                                restyled_img = degraded
+                        else:
+                            restyled_img = degraded
+
+                    # Pixel-fidelity pasteback (shared for V1/V2)
+                    if (fidelity_mode or "pixel") == "pixel" and fg_rgba is not None and fg_mask is not None:
+                        try:
+                            from PIL import ImageChops
+
+                            from app.services.harmonize import (
+                                color_match_product,
+                                despill,
+                                edge_only_blend,
+                                feather_alpha,
+                            )
+                            from app.services.shadow import ShadowService
+
+                            mask = fg_mask.convert("L")
+                            # Feather alpha edges a bit to reduce hard cutout look.
+                            mask_feather = feather_alpha(mask, radius=3)
+                            fg2 = despill(fg_rgba, mask_feather, strength=0.25)
+
+                            # Add a subtle contact shadow to ground the subject.
+                            shadow = ShadowService().create_contact_shadow(
+                                mask,
+                                band_ratio=0.10,
+                                blur_radius=10,
+                                opacity=0.18,
+                                y_offset=2,
+                            )
+                            shadow_multiplier = ImageChops.invert(shadow).convert("RGB")
+                            bg2 = ImageChops.multiply(restyled_img.convert("RGB"), shadow_multiplier)
+
+                            # Edge-only color harmonization: preserve opaque logo/text, but adjust edge pixels
+                            # to better match the rewritten background.
+                            try:
+                                alpha_full = mask_feather.convert("L")
+                                bbox = alpha_full.getbbox()
+                                if bbox is not None:
+                                    crop_rgb = fg2.convert("RGB").crop(bbox)
+                                    crop_a = alpha_full.crop(bbox)
+                                    matched = color_match_product(
+                                        product_rgb=crop_rgb,
+                                        product_alpha=crop_a,
+                                        background_rgb=bg2,
+                                        product_pos=(bbox[0], bbox[1]),
+                                        match_strength=0.55,
+                                    )
+                                    edge_rgb = edge_only_blend(
+                                        original_rgb=crop_rgb,
+                                        adjusted_rgb=matched,
+                                        alpha_l=crop_a,
+                                        power=1.6,
+                                    )
+                                    fg2_rgb_full = fg2.convert("RGB")
+                                    fg2_rgb_full.paste(edge_rgb, bbox)
+                                    fg2 = Image.merge("RGBA", (*fg2_rgb_full.split(), alpha_full))
+                            except Exception:
+                                pass
+
+                            restyled_img = paste_foreground_exact(
+                                background_rgb=bg2,
+                                foreground_rgba=fg2,
+                                mask_l=mask_feather,
+                            )
+                        except Exception:
+                            restyled_img = paste_foreground_exact(
+                                background_rgb=restyled_img,
+                                foreground_rgba=fg_rgba,
+                                mask_l=fg_mask,
+                            )
                 except Exception as exc:
                     err = str(exc)
                     restyled_img = img0

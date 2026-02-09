@@ -122,3 +122,32 @@ def color_match_product(
     out = prod_arr * (1 - match_strength) + matched * match_strength
     out = np.clip(out, 0, 255).astype(np.uint8)
     return Image.fromarray(out, mode="RGB")
+
+
+def edge_only_blend(
+    *,
+    original_rgb: Image.Image,
+    adjusted_rgb: Image.Image,
+    alpha_l: Image.Image,
+    power: float = 1.6,
+) -> Image.Image:
+    """Blend adjusted colors only near alpha edges.
+
+    This preserves fully-opaque product pixels (e.g. logo/text) while still allowing
+    edge harmonization to reduce cutout/sticker look.
+    """
+    base = original_rgb.convert("RGB")
+    adj = adjusted_rgb.convert("RGB").resize(base.size, Image.Resampling.LANCZOS)
+    a = np.array(alpha_l.convert("L").resize(base.size, Image.Resampling.LANCZOS), dtype=np.float32) / 255.0
+
+    # Weight is strongest on semi-transparent edges and near-zero in the opaque interior.
+    w = np.clip(1.0 - a, 0.0, 1.0)
+    if power and abs(float(power) - 1.0) > 1e-6:
+        w = np.power(w, float(power))
+    w3 = w[..., None]
+
+    base_arr = np.array(base, dtype=np.float32)
+    adj_arr = np.array(adj, dtype=np.float32)
+    out = base_arr * (1.0 - w3) + adj_arr * w3
+    out = np.clip(out, 0, 255).astype(np.uint8)
+    return Image.fromarray(out, mode="RGB")

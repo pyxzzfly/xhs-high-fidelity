@@ -11,8 +11,11 @@ class InpaintingService:
     def __init__(self, device="cpu"):
         self.api_url = os.getenv("PAINTER_EDIT_URL", "http://localhost:3000/replicate/images/edits")
         self.api_token = os.getenv("PAINTER_TOKEN", "")
-        # Enforced model as per architectural decision
-        self.model = "google/banana-pro" 
+        # Keep aligned with PainterClient; override via PAINTER_MODEL.
+        self.model = (os.getenv("PAINTER_MODEL") or "google/nano-banana").strip()
+        enforce = (os.getenv("ENFORCE_GOOGLE_MODELS") or "").strip().lower() in {"1", "true", "yes", "on"}
+        if enforce and self.model and not self.model.lower().startswith("google/"):
+            raise RuntimeError(f"PAINTER_MODEL must be a Google model id (got: {self.model})")
         
     def generate_background(
         self,

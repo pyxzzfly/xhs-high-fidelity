@@ -244,34 +244,45 @@ def generate_one(
     except Exception:
         pass
 
-    # Harmonize to reduce sticker look
+    # Harmonize to reduce sticker look (edge-only blending to preserve logo/text fidelity)
     try:
-        from app.services.harmonize import feather_alpha, despill, color_match_product
+        from app.services.harmonize import feather_alpha, despill, color_match_product, edge_only_blend
 
         prod_alpha = _extract_alpha_mask(prod_resized)
         prod_alpha = feather_alpha(prod_alpha, radius=max(2, int(0.006 * min(bw, bh))))
         prod_rgb = despill(prod_resized, prod_alpha, strength=0.35).convert("RGB")
-        prod_rgb = color_match_product(
+        matched_rgb = color_match_product(
             product_rgb=prod_rgb,
             product_alpha=prod_alpha,
             background_rgb=bg,
             product_pos=pos,
             match_strength=0.55,
         )
+        prod_rgb = edge_only_blend(original_rgb=prod_rgb, adjusted_rgb=matched_rgb, alpha_l=prod_alpha, power=1.6)
         prod_resized = Image.merge("RGBA", (*prod_rgb.split(), prod_alpha))
         prod_resized.save(run_dir / "product_harmonized.png")
     except Exception:
         pass
 
-    # Shadow mask (drop + contact)
+    # Shadow mask (drop + contact). Use scene lighting direction if available.
     shadow_mask = Image.new("L", bg.size, 0)
     if shadow:
         placed_mask = Image.new("L", bg.size, 0)
         placed_mask.paste(_extract_alpha_mask(prod_resized), pos)
 
+        # Default to a mild bottom-right offset (common for top-left lighting).
+        dx = int(0.03 * bw)
+        dy = int(0.03 * bh)
+        lighting = str((scene_info or {}).get("lighting_direction", "")).strip().lower()
+        if lighting == "top-right":
+            dx = -dx
+        elif lighting == "soft-ambient":
+            dx = 0
+            dy = max(1, int(0.02 * bh))
+
         drop = shadow_service.create_drop_shadow(
             placed_mask,
-            offset=(int(0.03 * bw), int(0.03 * bh)),
+            offset=(dx, dy),
             blur_radius=max(10, int(0.03 * min(bw, bh))),
             opacity=0.40,
             grow=2,

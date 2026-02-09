@@ -15,6 +15,10 @@ class VisionService:
         # whether images work depends on the selected model.
         self.model = os.getenv("BRAIN_MODEL") or "gemini-3-pro"
 
+        enforce = (os.getenv("ENFORCE_GOOGLE_MODELS") or "").strip().lower() in {"1", "true", "yes", "on"}
+        if enforce and self.model and "gemini" not in self.model.lower():
+            raise RuntimeError(f"BRAIN_MODEL must be a Gemini model id (got: {self.model})")
+
         self.client = None
         if not self.api_key or not self.base_url:
             logger.warning(
