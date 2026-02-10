@@ -54,13 +54,15 @@ def _choose_scene_tokens(*, title: str, bullets: List[str], rng) -> List[str]:
     # Generic safe scenes.
     pool = [
         "窗边桌面自然光",
-        "书桌（生活化收纳）",
-        "客厅茶几",
-        "厨房台面",
-        "餐桌角落",
-        "卧室床头柜",
-        "客厅边柜/置物架旁",
-        "阳台/飘窗小桌",
+        "书桌（生活化杂物）",
+        "客厅茶几（有杂物）",
+        "厨房台面（家常使用痕迹）",
+        "餐桌角落（随手摆放）",
+        "卧室床头柜（随手拍）",
+        "客厅边柜/置物架旁（家庭感）",
+        "阳台/飘窗小桌（生活气息）",
+        "玄关柜/鞋柜上（随手一放）",
+        "办公室工位桌面（键盘/文件旁）",
     ]
 
     # Pick a stable subset.
@@ -154,13 +156,16 @@ async def generate_ab_images(
         rng = random.Random(task_id)
         baseline = {
             # Keep UGC degradation mild; too much blur/noise increases "sticker" feel after fidelity pasteback.
-            "noise": rng.uniform(0.018, 0.032),
+            "noise": rng.uniform(0.020, 0.036),
             "contrast": rng.uniform(0.82, 0.90),
             "saturation": rng.uniform(0.88, 0.96),
-            "sharpness": rng.uniform(0.82, 0.92),
-            "blur": rng.uniform(0.45, 0.90),
+            "sharpness": rng.uniform(0.78, 0.90),
+            # Keep blur low to preserve label readability; add depth blur later for background if needed.
+            "blur": rng.uniform(0.25, 0.60),
             "wb": rng.uniform(-0.02, 0.06),
             "exposure": rng.uniform(0.96, 1.04),
+            "vignette": rng.uniform(0.04, 0.10),
+            "jpeg_q": int(rng.uniform(82, 90)),
         }
         # scene tokens: consistent set but rotate per image
         scene_tokens = _choose_scene_tokens(title=title or "", bullets=[str(b) for b in bullets], rng=rng) or ["窗边桌面自然光", "书桌", "客厅茶几"]
@@ -175,6 +180,7 @@ async def generate_ab_images(
         ugc_negative = (
             "studio lighting, commercial, ultra polished, beauty retouch, DSLR, bokeh, "
             "CGI, 3d render, perfect skin, over-sharpened, over-saturated, HDR, "
+            "advertisement, e-commerce, hero shot, luxury, magazine, pristine minimal background, "
             "watermark, text, caption, logo, subtitles, typography, sticker text, price tag, "
             "collage, cutout, sticker, pasted, floating object, oversized subject, wrong scale, "
             "wrong shadow, bad shadow, wrong perspective, floating, sticker-like edges"
@@ -297,12 +303,17 @@ async def generate_ab_images(
 
             scene = scene_tokens[idx % len(scene_tokens)]
             strength_hint = "中等变化" if lvl == "medium" else "更明显的变化"
+            ugc_candid_hint = (
+                "整体更像普通人手机随手拍：生活气息、有少量杂物与使用痕迹，光线不完美（轻微偏色/曝光不均也可以），"
+                "不要棚拍摆拍、不要电商产品主图质感；画面允许轻微手持感与压缩噪点，但不要糊成一团。"
+            )
 
             if engine == "v2_mask":
                 # Mask-edit mode: keep product stable; only rewrite background.
                 return (
                     "基于输入图做『背景局部改写』：只改背景和道具，不要改变主体/产品本身（形状、大小比例、文字、logo尽量保持）。"
                     f"背景换成更真实生活感、不过分干净的场景（{scene}），{strength_hint}。"
+                    f"{ugc_candid_hint}"
                     "保持相机视角与透视一致，光源方向一致，透视正确，接触阴影自然，避免漂浮和贴图感。"
                     "去掉输入图里原本的硬阴影/倒影/镜面反射痕迹，重新生成与新背景一致的自然投影（如需要）。"
                     "不要新增大面积遮挡主体的物体；不要添加水印；不要叠加文字/字幕/贴纸。"
@@ -313,6 +324,7 @@ async def generate_ab_images(
             return (
                 f"把这张图改写成『真实生活感』风格：手机随手拍，生活场景（{scene}），{strength_hint}。"
                 "不要棚拍、不要商业精修、不要过度锐化、不要HDR。"
+                f"{ugc_candid_hint}"
                 "保留核心主体与含义，但换背景/色调/光线，让它像同一个用户在不同场景拍的。"
                 "不要水印，不要叠加文字/字幕/贴纸/标题栏/价格标签（主体包装自带文字可以保留）。"
                 "主体在画面中的比例不要比原图更大，尽量保持相同或略小（避免近景放大特写）。"
@@ -468,34 +480,6 @@ async def generate_ab_images(
                         )
                         restyled_img = Image.open(io.BytesIO(out_bytes)).convert("RGB")
 
-
-                    # Post-degrade to more UGC (shared for V1/V2): do this before pasteback so
-                    # For V2, degrade only the editable region so the protected product stays intact.
-                    if (style_preset or "ugc") == "ugc":
-                        from app.services.ugc_degrade import apply_ugc_degrade
-
-                        j = lambda a, b: rng_local.uniform(a, b)
-                        degraded = apply_ugc_degrade(
-                            restyled_img,
-                            noise_strength=max(0.0, baseline["noise"] + j(-0.008, 0.014)),
-                            contrast=min(0.95, max(0.65, baseline["contrast"] + j(-0.04, 0.03))),
-                            saturation=min(1.05, max(0.65, baseline["saturation"] + j(-0.05, 0.05))),
-                            sharpness=min(1.05, max(0.55, baseline["sharpness"] + j(-0.08, 0.05))),
-                            blur_radius=min(2.0, max(0.3, baseline["blur"] + j(-0.30, 0.35))),
-                            wb_shift=min(0.14, max(-0.12, baseline["wb"] + j(-0.04, 0.04))),
-                            exposure=min(1.12, max(0.88, baseline["exposure"] + j(-0.04, 0.04))),
-                            # Avoid rotating only the background in V2 (would create seams).
-                            rotate_deg=0.0 if engine == "v2_mask" else j(-1.6, 1.6),
-                        )
-                        if engine == "v2_mask" and isinstance(v2_edit_mask_png, (bytes, bytearray)):
-                            try:
-                                edit_l = Image.open(io.BytesIO(v2_edit_mask_png)).convert("L")
-                                restyled_img = Image.composite(degraded, restyled_img, edit_l)
-                            except Exception:
-                                restyled_img = degraded
-                        else:
-                            restyled_img = degraded
-
                     # Pixel-fidelity pasteback (shared for V1/V2)
                     if (fidelity_mode or "pixel") == "pixel" and fg_rgba is not None and fg_mask is not None:
                         try:
@@ -568,6 +552,38 @@ async def generate_ab_images(
                     restyled_img = img0
             else:
                 err = "Painter not configured"
+
+            # Final UGC camera pass: apply globally so product/background share the same phone-like texture.
+            if (style_preset or "ugc") == "ugc" and painter.configured and restyled_img is not img0:
+                from app.services.ugc_degrade import apply_ugc_degrade
+
+                j = lambda a, b: rng_local.uniform(a, b)
+                noise = max(0.0, baseline["noise"] + j(-0.006, 0.010))
+                restyled_img = apply_ugc_degrade(
+                    restyled_img,
+                    noise_strength=noise,
+                    chroma_noise=max(0.0, noise * 0.55),
+                    noise_shadow_boost=rng_local.uniform(0.55, 0.95),
+                    contrast=min(0.96, max(0.65, baseline["contrast"] + j(-0.03, 0.03))),
+                    saturation=min(1.05, max(0.65, baseline["saturation"] + j(-0.05, 0.05))),
+                    sharpness=min(1.05, max(0.60, baseline["sharpness"] + j(-0.06, 0.05))),
+                    blur_radius=min(1.20, max(0.18, baseline["blur"] + j(-0.10, 0.22))),
+                    wb_shift=min(0.14, max(-0.12, baseline["wb"] + j(-0.03, 0.03))),
+                    exposure=min(1.10, max(0.88, baseline["exposure"] + j(-0.03, 0.03))),
+                    vignette=min(0.16, max(0.0, baseline["vignette"] + j(-0.02, 0.03))),
+                    jpeg_quality=int(max(70, min(94, baseline["jpeg_q"] + int(j(-3, 3))))),
+                    rotate_deg=j(-1.2, 1.2),
+                )
+
+                # Optional: a touch more background softness for depth-of-field, only in editable region (V2).
+                if engine == "v2_mask" and isinstance(v2_edit_mask_png, (bytes, bytearray)):
+                    try:
+                        edit_l = Image.open(io.BytesIO(v2_edit_mask_png)).convert("L")
+                        extra_blur = rng_local.uniform(0.20, 0.55) if lvl == "medium" else rng_local.uniform(0.28, 0.70)
+                        bg_soft = restyled_img.filter(ImageFilter.GaussianBlur(radius=float(extra_blur)))
+                        restyled_img = Image.composite(bg_soft, restyled_img, edit_l)
+                    except Exception:
+                        pass
 
             # Output image page WITHOUT any text overlays.
             page = make_page_contain(image=restyled_img, invert=(idx % 2 == 1))

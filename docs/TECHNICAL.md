@@ -81,7 +81,8 @@ graph TD
       - `product_protect`：比 core 更宽的保护区（用于“锁死产品边缘”），再做 dilate
       - `edit_mask = invert(product_protect_dilated)`
     - 调用 Painter `edit(image+mask)` 做背景改写（尽量保持主体形状/比例/文字不变）
-    - UGC 降质（`style_preset=ugc`）只作用在“可编辑区域”（背景），避免产品再被降质一次导致边缘不一致
+    - UGC 相机质感后处理（`style_preset=ugc`）对**全图**生效：轻微噪点/压缩/暗角/手持角度，让产品与背景共享同一套“手机随手拍”质感，降低贴图感
+      - V2 还会对“可编辑区域”（背景）额外做一点柔化，模拟景深
     - （可选）产品区域“高频细节迁移”，恢复包装文字/边缘纹理，降低贴图感
     - （仅激进）比例 gate：对输出重新估算产品 bbox 占比，漂移过大则自动降强度重试/回退
   - 可通过 `AB_IMAGES_ENGINE=v1_fullimg_pasteback` 切回旧逻辑（全图 img2img + 前景粘回）
