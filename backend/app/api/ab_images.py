@@ -45,14 +45,54 @@ def _load_images(urls: List[str]) -> List[Image.Image]:
     return imgs
 
 
+def _infer_product_category(*, title: str, bullets: List[str]) -> str:
+    """Infer a coarse product category from rewritten title/bullets.
+
+    Heuristic-only by default (fast, deterministic). This is used to pick more
+    plausible everyday scenes so the product looks "lived-in" instead of a
+    generic tabletop hero shot.
+    """
+    text = f"{title}\n" + "\n".join(str(b) for b in (bullets or []))
+    text = (text or "").strip().lower()
+    if not text:
+        return "generic"
+
+    def score(keywords: List[str]) -> int:
+        return sum(1 for kw in keywords if kw and kw.lower() in text)
+
+    # NOTE: keep categories broad; we only need scene plausibility, not taxonomy accuracy.
+    scores: dict[str, int] = {
+        "alcohol": score(["酒", "白酒", "啤酒", "红酒", "黄酒", "洋酒", "威士忌", "伏特加", "朗姆", "劲酒", "鸡尾酒", "小酌"]),
+        "beverage": score(["饮料", "果汁", "汽水", "苏打水", "气泡水", "茶", "咖啡", "奶茶", "牛奶", "酸奶", "椰子水", "椰汁"]),
+        "snack_food": score(["零食", "饼干", "薯片", "坚果", "巧克力", "糖", "辣条", "泡面", "方便面", "麦片", "果酱", "调味", "酱", "下饭"]),
+        "skincare": score(["护肤", "面霜", "乳液", "精华", "防晒", "洗面奶", "洁面", "爽肤水", "面膜", "喷雾", "身体乳", "卸妆"]),
+        "cosmetics": score(["口红", "唇釉", "粉底", "遮瑕", "眼影", "腮红", "眉笔", "睫毛", "定妆", "香水"]),
+        "home_cleaning": score(["清洁", "洗衣", "洗洁精", "消毒", "除菌", "洁厕", "拖把", "纸巾", "湿巾", "洗衣液", "洗衣粉", "去污"]),
+        "baby": score(["婴儿", "宝宝", "奶粉", "尿不湿", "纸尿裤", "辅食", "奶瓶", "孕妇", "宝妈"]),
+        "pet": score(["宠物", "猫", "狗", "猫砂", "狗粮", "猫粮", "冻干", "罐头"]),
+        "electronics": score(["手机", "耳机", "充电", "充电器", "数据线", "电脑", "键盘", "鼠标", "相机", "镜头", "投影", "手表"]),
+        "fashion": score(["衣", "鞋", "包", "裙", "外套", "帽", "围巾", "手链", "项链"]),
+        "supplement": score(["维生素", "益生菌", "蛋白", "胶原", "鱼油", "保健", "养生", "补剂", "睡眠", "褪黑素"]),
+    }
+
+    # If the text mentions alcohol explicitly, strongly prefer "alcohol" even if other keywords match.
+    best_cat = max(scores.items(), key=lambda kv: kv[1])[0]
+    best_score = scores.get(best_cat, 0)
+    if best_score <= 0:
+        return "generic"
+    return best_cat
+
+
 def _choose_scene_tokens(*, title: str, bullets: List[str], rng) -> List[str]:
     """Pick a small pool of plausible everyday scenes.
 
     Keep it generic (not tied to specific product categories), and avoid strange/unsafe
     settings that easily look "wrong" in real life.
     """
-    # Generic safe scenes.
-    pool = [
+    category = _infer_product_category(title=title, bullets=bullets)
+
+    # Generic safe scenes (fallback / mix-in).
+    generic_pool = [
         "窗边桌面自然光",
         "书桌（生活化杂物）",
         "客厅茶几（有杂物）",
@@ -65,8 +105,84 @@ def _choose_scene_tokens(*, title: str, bullets: List[str], rng) -> List[str]:
         "办公室工位桌面（键盘/文件旁）",
     ]
 
-    # Pick a stable subset.
-    k = 3 if len(pool) >= 3 else len(pool)
+    # Category-specific pools (more "reasonable" props/context).
+    by_cat: dict[str, List[str]] = {
+        # 酒：吃饭/聚会更自然；避免过度“电商摆拍”
+        "alcohol": [
+            "家常饭桌（有菜、碗筷、纸巾）",
+            "朋友小聚客厅茶几（零食/杯子）",
+            "火锅/烧烤小店餐桌（生活烟火气）",
+            "餐边柜/厨房吧台（杯子/开瓶器旁）",
+            "露台/窗边夜景小桌（暖光小酌氛围）",
+            "冰箱旁/餐桌边（随手拿出来拍）",
+        ],
+        "beverage": [
+            "早餐桌（面包/水果/杯子）",
+            "下午茶角落（书/笔记本/杯垫）",
+            "办公室工位（键盘/文件/水杯旁）",
+            "通勤包旁（随手放桌上）",
+            "健身后桌面（水杯/毛巾旁）",
+        ],
+        "snack_food": [
+            "追剧客厅茶几（遥控器/纸巾/零食碗）",
+            "办公室加班桌（便签/键盘旁）",
+            "餐桌角落（家常饭后小零食）",
+            "野餐垫/露营小桌（随手拍）",
+            "厨房台面（随手拆封）",
+        ],
+        "skincare": [
+            "浴室洗手台（毛巾/洗漱用品旁）",
+            "梳妆台（镜子/发夹/化妆棉旁）",
+            "床头柜（睡前护肤氛围）",
+            "随身化妆包旁（出门补涂）",
+        ],
+        "cosmetics": [
+            "梳妆台（镜子/刷具旁）",
+            "包里/桌面（出门补妆随手拍）",
+            "床头柜（夜间氛围灯）",
+        ],
+        "home_cleaning": [
+            "厨房水槽边（抹布/洗碗工具旁）",
+            "浴室台面（清洁工具旁）",
+            "洗衣机/洗衣篮旁（家务场景）",
+            "玄关/地面角落（清洁前后对比氛围）",
+        ],
+        "baby": [
+            "婴儿房收纳台（生活化摆放）",
+            "餐椅/餐桌一角（辅食时间）",
+            "妈咪包旁（出门随手拍）",
+        ],
+        "pet": [
+            "客厅地面（宠物用品旁）",
+            "猫爬架/宠物窝旁（生活化）",
+            "阳台角落（自然光随手拍）",
+        ],
+        "electronics": [
+            "书桌电脑旁（线材/笔记本旁）",
+            "床头柜（夜间台灯/充电场景）",
+            "咖啡店小桌（随手拍）",
+            "行李箱/出差包旁（出行场景）",
+        ],
+        "fashion": [
+            "玄关镜子旁（出门前随手拍）",
+            "衣柜/床边（试穿场景）",
+            "沙发角落（随手摆放）",
+        ],
+        "supplement": [
+            "早餐桌（水杯/勺子旁）",
+            "书桌一角（规律打卡氛围）",
+            "运动包/健身角落（水杯旁）",
+        ],
+    }
+
+    pool = list(by_cat.get(category) or [])
+    # Mix-in generics to keep variety, but keep category scenes dominant when detected.
+    for s in generic_pool:
+        if s not in pool:
+            pool.append(s)
+
+    # Pick a stable subset (rotate per image).
+    k = 4 if len(pool) >= 4 else len(pool)
     return rng.sample(pool, k=k) if k else []
 
 
@@ -167,8 +283,37 @@ async def generate_ab_images(
             "vignette": rng.uniform(0.04, 0.10),
             "jpeg_q": int(rng.uniform(82, 90)),
         }
-        # scene tokens: consistent set but rotate per image
-        scene_tokens = _choose_scene_tokens(title=title or "", bullets=[str(b) for b in bullets], rng=rng) or ["窗边桌面自然光", "书桌", "客厅茶几"]
+        # Scene tokens: pick more reasonable everyday contexts based on inferred product category.
+        scene_category = _infer_product_category(title=title or "", bullets=[str(b) for b in bullets])
+        scene_tokens = _choose_scene_tokens(title=title or "", bullets=[str(b) for b in bullets], rng=rng) or [
+            "窗边桌面自然光",
+            "书桌（生活化杂物）",
+            "客厅茶几（有杂物）",
+        ]
+
+        def _category_hint(cat: str) -> str:
+            cat = (cat or "").strip().lower()
+            if cat == "alcohol":
+                return "产品是酒类，更适合吃饭/聚会/下酒菜的烟火气场景，道具可以有碗筷/菜/杯子，但不要出现人物。"
+            if cat == "beverage":
+                return "产品是饮品，更适合早餐/下午茶/通勤/工位的生活场景，道具可以有杯子/吸管/纸巾/笔记本，但不要出现人物。"
+            if cat == "snack_food":
+                return "产品是零食/食品，更适合追剧/加班/野餐/饭后的小场景，道具可以有零食碗/纸巾/遥控器，但不要出现人物。"
+            if cat in {"skincare", "cosmetics"}:
+                return "产品偏护肤/美妆，更适合浴室洗手台/梳妆台/包里随手拍的生活场景，道具可以有毛巾/化妆棉/镜子，但不要出现人物。"
+            if cat == "home_cleaning":
+                return "产品偏家清，更适合厨房/浴室/洗衣角落的家务场景，道具可以有抹布/水槽/洗衣篮，但不要出现人物。"
+            if cat == "baby":
+                return "产品偏母婴，更适合婴儿房/餐椅/妈咪包的生活场景，道具可以有收纳盒/奶瓶，但不要出现人物。"
+            if cat == "pet":
+                return "产品偏宠物，更适合客厅地面/宠物窝旁的生活场景，道具可以有宠物碗/玩具，但不要出现人物。"
+            if cat == "electronics":
+                return "产品偏数码，更适合书桌/床头/出行的生活场景，道具可以有线材/笔记本/台灯，但不要出现人物。"
+            if cat == "fashion":
+                return "产品偏穿搭，更适合玄关/衣柜/沙发角落的随手摆放场景，但不要出现人物。"
+            if cat == "supplement":
+                return "产品偏营养补充，更适合早餐桌/书桌/运动后角落的打卡场景，道具可以有水杯/勺子，但不要出现人物。"
+            return "尽量选择与产品用途更搭的生活场景与道具，不要棚拍摆拍，也不要出现人物。"
 
         # Shared prompt pieces
         glossy_prompt = (
@@ -307,6 +452,7 @@ async def generate_ab_images(
                 "整体更像普通人手机随手拍：生活气息、有少量杂物与使用痕迹，光线不完美（轻微偏色/曝光不均也可以），"
                 "不要棚拍摆拍、不要电商产品主图质感；画面允许轻微手持感与压缩噪点，但不要糊成一团。"
             )
+            cat_hint = _category_hint(scene_category)
 
             if engine == "v2_mask":
                 # Mask-edit mode: keep product stable; only rewrite background.
@@ -314,6 +460,7 @@ async def generate_ab_images(
                     "基于输入图做『背景局部改写』：只改背景和道具，不要改变主体/产品本身（形状、大小比例、文字、logo尽量保持）。"
                     f"背景换成更真实生活感、不过分干净的场景（{scene}），{strength_hint}。"
                     f"{ugc_candid_hint}"
+                    f"{cat_hint}"
                     "保持相机视角与透视一致，光源方向一致，透视正确，接触阴影自然，避免漂浮和贴图感。"
                     "去掉输入图里原本的硬阴影/倒影/镜面反射痕迹，重新生成与新背景一致的自然投影（如需要）。"
                     "不要新增大面积遮挡主体的物体；不要添加水印；不要叠加文字/字幕/贴纸。"
@@ -325,6 +472,7 @@ async def generate_ab_images(
                 f"把这张图改写成『真实生活感』风格：手机随手拍，生活场景（{scene}），{strength_hint}。"
                 "不要棚拍、不要商业精修、不要过度锐化、不要HDR。"
                 f"{ugc_candid_hint}"
+                f"{cat_hint}"
                 "保留核心主体与含义，但换背景/色调/光线，让它像同一个用户在不同场景拍的。"
                 "不要水印，不要叠加文字/字幕/贴纸/标题栏/价格标签（主体包装自带文字可以保留）。"
                 "主体在画面中的比例不要比原图更大，尽量保持相同或略小（避免近景放大特写）。"
