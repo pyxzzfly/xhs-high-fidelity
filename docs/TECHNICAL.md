@@ -61,6 +61,12 @@ graph TD
 依赖：
 - `BRAIN_API_KEY`, `BRAIN_BASE_URL`, `BRAIN_MODEL`
 
+错误码约定（便于排障）：
+- `400`：入参问题（例如 `original_text` 为空）
+- `429`：上游限流
+- `502/503`：上游网关/模型服务不可用（例如 `BRAIN_BASE_URL` 返回 502）
+- `500`：其他未分类异常
+
 ### 2.3 C：配图仿写 `/api/v1/ab_images`
 
 代码：`backend/app/api/ab_images.py`
@@ -70,8 +76,12 @@ graph TD
   - 通过 `xhs_image_proxy.fetch_xhs_image` 拉取原图
   - 默认走 **V2（背景局部改写 / mask edit）**：
     - Matting sidecar 提取产品 mask（用于“锁死主体、只改背景”）
-    - 生成背景编辑 mask：`edit_mask = invert(dilate(product_mask))`
+    - 生成保护区/编辑 mask（核心思想：保护产品边缘，避免“产品被重绘后又叠加回去”的贴图感）：
+      - `product_core`：高阈值 + opening +（可选）erosion，尽量只保留产品本体（用于细节保真/统计）
+      - `product_protect`：比 core 更宽的保护区（用于“锁死产品边缘”），再做 dilate
+      - `edit_mask = invert(product_protect_dilated)`
     - 调用 Painter `edit(image+mask)` 做背景改写（尽量保持主体形状/比例/文字不变）
+    - UGC 降质（`style_preset=ugc`）只作用在“可编辑区域”（背景），避免产品再被降质一次导致边缘不一致
     - （可选）产品区域“高频细节迁移”，恢复包装文字/边缘纹理，降低贴图感
     - （仅激进）比例 gate：对输出重新估算产品 bbox 占比，漂移过大则自动降强度重试/回退
   - 可通过 `AB_IMAGES_ENGINE=v1_fullimg_pasteback` 切回旧逻辑（全图 img2img + 前景粘回）
@@ -91,6 +101,8 @@ graph TD
 - 确保 product RGBA（如无 alpha，调用 matting sidecar 抠图）
 - 参考图分析（Vision/Heuristic）
 - 参考替换：移除参考图原前景 -> 放入新产品 -> 生成阴影 -> harmonize
+  - harmonize 为“边缘融合优先”（edge-only blend），以保住包装文字/Logo 不失真
+  - 阴影方向会参考 `lighting_direction`（若 Vision 可用）
 - 产物落盘：`assets/runs/<task_id>/final.png` 并通过 `/runs` 静态挂载提供
 
 ### 2.5 E：批处理 Flow `/api/v1/flow/*`
@@ -144,32 +156,54 @@ graph TD
 
 来源：`backend/.env.example` + 代码默认值。
 
-### 4.1 文案（Brain）
+### 4.1 Brain（洗稿/多模态分析）
 
 - `BRAIN_API_KEY`
 - `BRAIN_BASE_URL`
-- `BRAIN_MODEL`
+- `BRAIN_MODEL`（默认 `gemini-3-pro`）
 
-### 4.2 Matting Sidecar
+### 4.2 Painter（图像改写服务）
+
+- `PAINTER_EDIT_URL`
+- `PAINTER_TOKEN`
+- `PAINTER_MODEL`（当前网关中 Banana Pro 对应 `google/nano-banana`）
+- `ENFORCE_GOOGLE_MODELS`（可选，`true/false`）：
+  - 开启后要求 `PAINTER_MODEL` 必须以 `google/` 开头
+  - 同时要求 `BRAIN_MODEL` 必须包含 `gemini`
+
+### 4.3 Matting Sidecar（抠图）
 
 - `MATTING_BASE_URL`（默认 `http://127.0.0.1:8911`）
+- `MATTING_URL`（legacy 名称，仍兼容）
 
-### 4.5 AB Images 并发（可选）
+说明：
+- 后端调用 matting 时会禁用环境代理（httpx `trust_env=false`），避免 localhost 被代理转发导致 `502 Bad Gateway`。
+
+### 4.4 AB Images 并发（可选）
 
 - `AB_IMAGES_CONCURRENCY`（默认 `2`）：配图仿写时后端并发度。越大越快，但更吃 GPU/画图服务吞吐。
 
-### 4.6 AB Images 质量（可选）
+### 4.5 AB Images 质量（可选）
 
 默认无需配置；当你遇到“贴图感/比例失控”时可调：
 
 - `AB_IMAGES_ENGINE`：`v2_mask`（默认）| `v1_fullimg_pasteback`（旧逻辑兜底）
-- `AB_MASK_PROTECT_DILATE_PX`（默认 `8`）：主体保护膨胀像素，越大越不容易改到主体边缘
+- `AB_PRODUCT_CORE_THRESHOLD`（默认 `224`）：核心阈值（越大越偏向“只保护产品本体”）
+- `AB_PRODUCT_MASK_OPEN_PX`（默认 `3`）：核心 mask opening 像素（用于去掉阴影突起等噪声）
+- `AB_PRODUCT_CORE_ERODE_PX`（默认 `0`）：可选进一步收缩核心保护区（过大可能误伤文字/Logo）
+- `AB_PRODUCT_PROTECT_THRESHOLD`（默认 `AB_PRODUCT_CORE_THRESHOLD-40` 且最低 160）：
+  - 保护区阈值（越小保护越大，越不容易改到产品边缘）
+  - 用来减少“边缘被改写后又叠加回去”的贴图感
+- `AB_MASK_PROTECT_DILATE_PX`（默认 `4`）：保护区膨胀像素（越大越不容易改到主体边缘，但也更容易残留原图阴影/倒影）
+- `AB_V2_AGGRESSIVE_EDIT_ERODE_PX`（默认 `2`）：aggressive 档额外收紧可编辑区域，避免背景重绘侵入产品边缘
 - `AB_MAX_BBOX_RATIO_DELTA`（默认 `0.08`）：激进档“主体占比漂移阈值”（超过会自动降强度重试/回退）
 - `AB_DETAIL_TRANSFER`（默认 `1`）：是否启用“高频细节迁移”
 - `AB_DETAIL_TRANSFER_ALPHA`（默认 `0.22`）：细节迁移强度（过大会变“硬贴”，过小会丢文字细节）
 - `AB_DETAIL_TRANSFER_BLUR_RADIUS`（默认 `2.0`）：细节高通的 blur 半径
+- `AB_DETAIL_TRANSFER_THRESHOLD`（默认同 `AB_PRODUCT_CORE_THRESHOLD`）：细节迁移阈值
+- `AB_DETAIL_TRANSFER_INNER_ERODE_PX`（默认 `8`）：细节迁移内缩像素（避免把边缘阴影一起迁回）
 
-### 4.3 XHS 采集（Playwright + Cookie）
+### 4.6 XHS 采集（Playwright + Cookie）
 
 - `XHS_USER_DATA_DIR`（必填）
 - `XHS_PLAYWRIGHT_HEADLESS`（建议 false）
@@ -181,7 +215,7 @@ graph TD
 - `XHS_COOKIE_ENV_PATH`（可选）
 - `XHS_COOKIE_PERSIST_MIN_INTERVAL_S`
 
-### 4.4 日志
+### 4.7 日志
 
 - `LOG_LEVEL`
 - `XHS_LOG_STAGE`
