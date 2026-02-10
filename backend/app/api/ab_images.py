@@ -96,8 +96,8 @@ def _choose_scene_tokens(*, title: str, bullets: List[str], rng) -> List[str]:
         "窗边桌面自然光",
         "书桌（生活化杂物）",
         "客厅茶几（有杂物）",
-        "厨房台面（家常使用痕迹）",
-        "餐桌角落（随手摆放）",
+        "厨房台面（干净但生活化）",
+        "餐桌角落（干净但随手）",
         "卧室床头柜（随手拍）",
         "客厅边柜/置物架旁（家庭感）",
         "阳台/飘窗小桌（生活气息）",
@@ -109,9 +109,9 @@ def _choose_scene_tokens(*, title: str, bullets: List[str], rng) -> List[str]:
     by_cat: dict[str, List[str]] = {
         # 酒：吃饭/聚会更自然；避免过度“电商摆拍”
         "alcohol": [
-            "家常饭桌（有菜、碗筷、纸巾）",
-            "朋友小聚客厅茶几（零食/杯子）",
-            "火锅/烧烤小店餐桌（生活烟火气）",
+            "家常饭桌（有菜、碗筷、杯子）",
+            "朋友小聚客厅茶几（零食/杯子/纸巾）",
+            "火锅/烧烤餐桌（烟火气但干净）",
             "餐边柜/厨房吧台（杯子/开瓶器旁）",
             "露台/窗边夜景小桌（暖光小酌氛围）",
             "冰箱旁/餐桌边（随手拿出来拍）",
@@ -294,26 +294,26 @@ async def generate_ab_images(
         def _category_hint(cat: str) -> str:
             cat = (cat or "").strip().lower()
             if cat == "alcohol":
-                return "产品是酒类，更适合吃饭/聚会/下酒菜的烟火气场景，道具可以有碗筷/菜/杯子，但不要出现人物。"
+                return "产品是酒类，更适合吃饭/聚会/下酒菜的烟火气场景。可以有碗筷/菜/杯子/纸巾/开瓶器，让人感觉“有人刚在用”，但不要出现清晰人脸/完整人物。"
             if cat == "beverage":
-                return "产品是饮品，更适合早餐/下午茶/通勤/工位的生活场景，道具可以有杯子/吸管/纸巾/笔记本，但不要出现人物。"
+                return "产品是饮品，更适合早餐/下午茶/通勤/工位的生活场景。可以有杯子/吸管/纸巾/笔记本/手机等“手边物品”，但不要出现清晰人脸/完整人物。"
             if cat == "snack_food":
-                return "产品是零食/食品，更适合追剧/加班/野餐/饭后的小场景，道具可以有零食碗/纸巾/遥控器，但不要出现人物。"
+                return "产品是零食/食品，更适合追剧/加班/野餐/饭后的小场景。可以有零食碗/纸巾/遥控器/拆封包装等，但不要出现清晰人脸/完整人物。"
             if cat in {"skincare", "cosmetics"}:
-                return "产品偏护肤/美妆，更适合浴室洗手台/梳妆台/包里随手拍的生活场景，道具可以有毛巾/化妆棉/镜子，但不要出现人物。"
+                return "产品偏护肤/美妆，更适合浴室洗手台/梳妆台/包里随手拍的生活场景。可以有毛巾/化妆棉/镜子/化妆刷等，但不要出现清晰人脸/完整人物。"
             if cat == "home_cleaning":
-                return "产品偏家清，更适合厨房/浴室/洗衣角落的家务场景，道具可以有抹布/水槽/洗衣篮，但不要出现人物。"
+                return "产品偏家清，更适合厨房/浴室/洗衣角落的家务场景。可以有抹布/水槽/洗衣篮/清洁工具等“正在用”的细节，但不要出现清晰人脸/完整人物。"
             if cat == "baby":
-                return "产品偏母婴，更适合婴儿房/餐椅/妈咪包的生活场景，道具可以有收纳盒/奶瓶，但不要出现人物。"
+                return "产品偏母婴，更适合婴儿房/餐椅/妈咪包的生活场景。可以有收纳盒/奶瓶/小玩具等，但不要出现清晰人脸/完整人物。"
             if cat == "pet":
-                return "产品偏宠物，更适合客厅地面/宠物窝旁的生活场景，道具可以有宠物碗/玩具，但不要出现人物。"
+                return "产品偏宠物，更适合客厅地面/宠物窝旁的生活场景。可以有宠物碗/玩具/毛垫等，但不要出现清晰人脸/完整人物。"
             if cat == "electronics":
-                return "产品偏数码，更适合书桌/床头/出行的生活场景，道具可以有线材/笔记本/台灯，但不要出现人物。"
+                return "产品偏数码，更适合书桌/床头/出行的生活场景。可以有线材/笔记本/台灯/行李标签等“人正在用”的细节，但不要出现清晰人脸/完整人物。"
             if cat == "fashion":
-                return "产品偏穿搭，更适合玄关/衣柜/沙发角落的随手摆放场景，但不要出现人物。"
+                return "产品偏穿搭，更适合玄关/衣柜/沙发角落的随手摆放场景。可以有衣架/镜子/包/钥匙等，但不要出现清晰人脸/完整人物。"
             if cat == "supplement":
-                return "产品偏营养补充，更适合早餐桌/书桌/运动后角落的打卡场景，道具可以有水杯/勺子，但不要出现人物。"
-            return "尽量选择与产品用途更搭的生活场景与道具，不要棚拍摆拍，也不要出现人物。"
+                return "产品偏营养补充，更适合早餐桌/书桌/运动后角落的打卡场景。可以有水杯/勺子/毛巾等，但不要出现清晰人脸/完整人物。"
+            return "尽量选择与产品用途更搭的生活场景与道具，不要棚拍摆拍。可以有“有人在场”的手边物品，但不要出现清晰人脸/完整人物。"
 
         # Shared prompt pieces
         glossy_prompt = (
@@ -326,6 +326,7 @@ async def generate_ab_images(
             "studio lighting, commercial, ultra polished, beauty retouch, DSLR, bokeh, "
             "CGI, 3d render, perfect skin, over-sharpened, over-saturated, HDR, "
             "advertisement, e-commerce, hero shot, luxury, magazine, pristine minimal background, "
+            "old, shabby, dirty, grime, mold, rust, broken, trash, messy clutter, "
             "watermark, text, caption, logo, subtitles, typography, sticker text, price tag, "
             "collage, cutout, sticker, pasted, floating object, oversized subject, wrong scale, "
             "wrong shadow, bad shadow, wrong perspective, floating, sticker-like edges"
@@ -449,8 +450,11 @@ async def generate_ab_images(
             scene = scene_tokens[idx % len(scene_tokens)]
             strength_hint = "中等变化" if lvl == "medium" else "更明显的变化"
             ugc_candid_hint = (
-                "整体更像普通人手机随手拍：生活气息、有少量杂物与使用痕迹，光线不完美（轻微偏色/曝光不均也可以），"
-                "不要棚拍摆拍、不要电商产品主图质感；画面允许轻微手持感与压缩噪点，但不要糊成一团。"
+                "整体更像普通人手机随手拍：画面可以很干净、物品可以很新，但不要刻意摆拍。"
+                "用拍摄手法与镜头感体现素人：轻微手持倾斜、构图不完美（不必居中对齐）、"
+                "自然光/室内混合光、自动白平衡与曝光略有波动、局部阴影不过分柔美。"
+                "可以出现“有人在场”的手边物品（手机/钥匙/纸巾/杯子/餐具/书本等），"
+                "允许轻微噪点/压缩感/景深，但不要糊成一团。不要棚拍、不要电商主图质感。"
             )
             cat_hint = _category_hint(scene_category)
 
