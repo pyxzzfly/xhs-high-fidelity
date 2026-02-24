@@ -205,6 +205,9 @@ graph TD
 - `AB_DETAIL_TRANSFER_BLUR_RADIUS`（默认 `2.0`）：细节高通的 blur 半径
 - `AB_DETAIL_TRANSFER_THRESHOLD`（默认同 `AB_PRODUCT_CORE_THRESHOLD`）：细节迁移阈值
 - `AB_DETAIL_TRANSFER_INNER_ERODE_PX`（默认 `8`）：细节迁移内缩像素（避免把边缘阴影一起迁回）
+- `AB_GLOSSY_PROTECT_ERODE_PX`（默认 `1`）：`glossy` 模式下对保护区做额外腐蚀，让产品边缘附近更可编辑，用于清理参考图残影/重影
+- `AB_GLOSSY_CORE_LOCK_ERODE_PX`（默认 `6`）：`glossy` 模式下仅把产品“内核区域”从原图回贴，保护文字/Logo 同时避免边缘双轮廓
+- `AB_GLOSSY_ENABLE_DETAIL_TRANSFER`（默认 `0`）：`glossy` 默认关闭细节迁移以减少重影；必要时可开启
 
 ### 4.6 XHS 采集（Playwright + Cookie）
 

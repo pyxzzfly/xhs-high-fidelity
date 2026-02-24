@@ -249,6 +249,22 @@ async def generate_ab_images(
         detail_threshold = max(128, min(250, detail_threshold))
         detail_inner_erode_px = int(os.getenv("AB_DETAIL_TRANSFER_INNER_ERODE_PX") or "8")
         detail_inner_erode_px = max(0, min(64, detail_inner_erode_px))
+        style_kind = (style_preset or "ugc").strip().lower()
+        is_glossy = style_kind == "glossy"
+
+        # Glossy anti-ghost controls:
+        # - shrink protected edge band so Painter can repaint old halo/shadow near product border
+        # - lock only product interior pixels from source (avoid edge double contour)
+        glossy_protect_erode_px = int(os.getenv("AB_GLOSSY_PROTECT_ERODE_PX") or "1")
+        glossy_protect_erode_px = max(0, min(16, glossy_protect_erode_px))
+        glossy_core_lock_erode_px = int(os.getenv("AB_GLOSSY_CORE_LOCK_ERODE_PX") or "6")
+        glossy_core_lock_erode_px = max(0, min(32, glossy_core_lock_erode_px))
+        glossy_enable_detail_transfer = (os.getenv("AB_GLOSSY_ENABLE_DETAIL_TRANSFER") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
         # Parse levels
         try:
@@ -410,6 +426,15 @@ async def generate_ab_images(
                 except Exception:
                     pass
 
+                # In glossy mode, shrink protection slightly so edge halo/old contact shadow
+                # is editable (prevents residual "reference ghost" around product border).
+                if is_glossy and glossy_protect_erode_px > 0:
+                    size = glossy_protect_erode_px * 2 + 1
+                    if size >= 3:
+                        eroded = product_protect.filter(ImageFilter.MinFilter(size=size))
+                        if eroded.getbbox() is not None:
+                            product_protect = eroded
+
                 protected = product_protect
                 if protect_dilate_px > 0:
                     size = protect_dilate_px * 2 + 1
@@ -555,14 +580,21 @@ async def generate_ab_images(
                                 image_bytes=base_png,
                                 mask_bytes=edit_mask_png_use,
                                 prompt=prompt,
-                                negative_prompt=ugc_negative if (style_preset or "ugc") == "ugc" else "",
+                                negative_prompt=(
+                                    ugc_negative
+                                    if style_kind == "ugc"
+                                    else "double exposure, ghosting, duplicate outline, residual shadow, "
+                                    "afterimage, reflection artifact, sticker edge"
+                                ),
                                 guidance_scale=g,
                                 num_inference_steps=steps,
                                 prompt_strength=ps_use,
                                 output_format="png",
                             )
                             out_img = Image.open(io.BytesIO(out_bytes)).convert("RGB")
-                            if detail_transfer_on and detail_alpha > 0:
+                            # Glossy tends to reveal reference ghosting if we transfer high-frequency
+                            # details too aggressively from source; default disable unless explicitly enabled.
+                            if detail_transfer_on and detail_alpha > 0 and (not is_glossy or glossy_enable_detail_transfer):
                                 out_img = transfer_high_frequency_details(
                                     base_rgb=img0,
                                     out_rgb=out_img,
@@ -572,6 +604,28 @@ async def generate_ab_images(
                                     threshold=detail_threshold,
                                     inner_erode_px=detail_inner_erode_px,
                                 )
+
+                            # Core-lock only product interior (not edges): keep logo/text fidelity while
+                            # letting border region stay rewritten to avoid double contours/ghost edges.
+                            if is_glossy and glossy_core_lock_erode_px >= 0:
+                                try:
+                                    core_lock_l = Image.open(io.BytesIO(product_core_png)).convert("L")
+                                    if glossy_core_lock_erode_px > 0:
+                                        size = glossy_core_lock_erode_px * 2 + 1
+                                        if size >= 3:
+                                            eroded = core_lock_l.filter(ImageFilter.MinFilter(size=size))
+                                            if eroded.getbbox() is not None:
+                                                core_lock_l = eroded
+                                    if core_lock_l.getbbox() is not None:
+                                        src_rgba = img0.convert("RGBA")
+                                        src_rgba.putalpha(core_lock_l)
+                                        out_img = paste_foreground_exact(
+                                            background_rgb=out_img,
+                                            foreground_rgba=src_rgba,
+                                            mask_l=core_lock_l,
+                                        )
+                                except Exception:
+                                    pass
                             return out_img
 
                         def _ratio_for(img: Image.Image) -> float | None:
